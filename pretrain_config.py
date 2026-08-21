@@ -49,10 +49,10 @@ class PretrainConfig(pydantic.BaseModel):
     run_name: Optional[str] = None
     load_checkpoint: Optional[str] = None  # weights-only load (transfer / eval)
     resume_from: Optional[str] = None  # full resume: bundle path or its directory
-    checkpoint_path: Optional[str] = None
+    checkpoint_path: Optional[str] = /home/m7adnan/fprm/checkpoints  # where to save checkpoints
     metrics_out: Optional[str] = None  # eval-only: dump per-k metrics as plot JSON
 
-    # Extras
+    # Extrass
     seed: int = 0
     checkpoint_every_eval: bool = False
     checkpoint_every_n_steps: Optional[int] = None  # if set, also save a checkpoint every N training steps
