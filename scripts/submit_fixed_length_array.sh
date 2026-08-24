@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fork the base checkpoint into five independent controls that retain the
-# original FPRM training length: exactly 24 recurrent iterations per batch.
+# original FPRM training recipe, including its halting configuration.
 #
 # Usage:
 #   sbatch scripts/submit_fixed_length_array.sh
@@ -14,6 +14,7 @@
 #SBATCH --array=0-4
 #SBATCH --time=11:00:00
 #SBATCH --gres=gpu:h100:4
+#SBATCH --exclude=fc10218
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
 #SBATCH --output=/home/m7adnan/scratch/fprm/fixed_length_experiment/slurm_logs/%x_%A_%a.out
@@ -29,8 +30,6 @@ FORK_ID="${SLURM_ARRAY_TASK_ID}"
 
 cd "$REPO_ROOT"
 mkdir -p /home/m7adnan/scratch/fprm/fixed_length_experiment/slurm_logs
-
-export DISABLE_COMPILE="${DISABLE_COMPILE:-1}"
 
 python scripts/fork_common.py check-paths "$CONTROL_CONFIG"
 eval "$(python scripts/fork_common.py regime "$CONTROL_CONFIG" "$FORK_ID" --shell)"
@@ -61,13 +60,13 @@ mkdir -p "$CHECKPOINT_PATH"
 eval "$(python scripts/fork_common.py epochs-info "$BASE_ALL_CONFIG" --shell)"
 EPOCHS=$(( BASE_EPOCHS + ( (ADDITIONAL_EPOCHS_BUDGET + EVAL_INTERVAL - 1) / EVAL_INTERVAL ) * EVAL_INTERVAL ))
 
-echo "FPRM fixed-length control -- array task ${FORK_ID} (${REGIME_NAME})"
+echo "FPRM original-halting control -- array task ${FORK_ID} (${REGIME_NAME})"
 echo "  base checkpoint: ${BASE_CHECKPOINT}"
 echo "  resuming from:   ${RESUME_FROM}"
 echo "  run name:        ${RUN_NAME}"
 echo "  checkpoint path: ${CHECKPOINT_PATH}"
 echo "  seed:            ${SEED}"
-echo "  loop policy:     deterministic ${MAX_LOOPS} iterations"
+echo "  halting policy:  inherited from ${BASE_ALL_CONFIG}"
 echo "  epochs:          ${BASE_EPOCHS} -> ${EPOCHS}"
 echo "  wandb group:     ${WANDB_GROUP}"
 
@@ -77,8 +76,6 @@ OVERRIDES=(
   "epochs=${EPOCHS}"
   "run_name=${RUN_NAME}"
   "checkpoint_path=${CHECKPOINT_PATH}"
-  "arch.max_iter_dist=det"
-  "arch.max_iter=${MAX_LOOPS}"
   "+fork_id=${FORK_ID}"
   "+fork_regime=${REGIME_NAME}"
   "+wandb_group=${WANDB_GROUP}"

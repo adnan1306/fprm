@@ -1,5 +1,5 @@
-# Five independent controls forked from the same base checkpoint. All use
-# the original FPRM training computation length: deterministic 24 iterations.
+# Five independent controls forked from the same base checkpoint. The launcher
+# preserves the complete halting configuration from the base run's all_config.yaml.
 # This file is consumed by scripts/submit_fixed_length_array.sh.
 
 base_checkpoint: /home/m7adnan/scratch/fprm/checkpoints/step_32550
@@ -12,8 +12,8 @@ early_stop_metric_key: eval/lm_loss
 early_stop_min_delta: 0.0
 
 # Unique names keep all five checkpoint directories separate. min_loops and
-# max_loops are both 24 for compatibility with the shared fork config parser;
-# the launcher explicitly selects the deterministic distribution.
+# max_loops remain required by the shared fork config parser, but the launcher
+# does not apply them as Hydra overrides.
 regimes:
   - id: 0
     name: fixed24_replica0
