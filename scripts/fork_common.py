@@ -7,12 +7,24 @@ Also usable from the shell: `regime`/`epochs-info` subcommands print either
 JSON or, with --shell, `KEY='value'` lines safe to `eval` directly.
 """
 import argparse
+import glob
 import json
 import os
 import shlex
 import sys
 
 import yaml
+
+
+def own_resume_bundle(checkpoint_path: str):
+    """Highest-step step_*_train_state.pt already inside this fork's own
+    checkpoint_path, if any — i.e. this fork previously made progress (e.g.
+    before a SLURM preemption) and a requeue should continue from there
+    rather than re-resuming the shared base checkpoint from scratch."""
+    cands = glob.glob(os.path.join(checkpoint_path, "step_*_train_state.pt"))
+    if not cands:
+        return None
+    return max(cands, key=lambda p: int(os.path.basename(p).split("_")[1]))
 
 
 def load_fork_config(path: str) -> dict:
@@ -51,6 +63,26 @@ def _print(fields: dict, shell: bool):
 def _cmd_regime(args):
     cfg = load_fork_config(args.fork_config)
     r = regime_for_id(cfg, args.fork_id)
+    checkpoint_path = checkpoint_path_for(cfg, args.fork_id, r["name"])
+    base_bundle = cfg["base_checkpoint"] + "_train_state.pt"
+
+    own_bundle = own_resume_bundle(checkpoint_path)
+    already_final = os.path.isfile(os.path.join(checkpoint_path, "final_train_state.pt"))
+    # First launch: resume from the shared base checkpoint. A requeue after
+    # preemption: resume from this fork's own latest bundle instead, so
+    # progress since forking isn't discarded and its wandb run continues
+    # rather than a duplicate being created (see pretrain.py's prev_wandb_id
+    # handling, which only trusts a resumed bundle's wandb_id when it's this
+    # fork's own — this field is what lets it tell the two cases apart).
+    resume_from = own_bundle if own_bundle else base_bundle
+
+    has_content = os.path.isdir(checkpoint_path) and bool(os.listdir(checkpoint_path))
+    # A non-empty checkpoint_path is only safe to proceed into when it's
+    # this fork's own recognizable prior progress (an own bundle, or it's
+    # already finished) — anything else is unrecognized/foreign content and
+    # the launcher should refuse rather than silently building on top of it.
+    dir_safe = (not has_content) or bool(own_bundle) or already_final
+
     fields = {
         "BASE_CHECKPOINT": cfg["base_checkpoint"],
         "OUTPUT_ROOT": cfg["output_root"],
@@ -64,7 +96,11 @@ def _cmd_regime(args):
         "MIN_LOOPS": r["min_loops"],
         "MAX_LOOPS": r["max_loops"],
         "RUN_NAME": run_name(args.fork_id, r["name"]),
-        "CHECKPOINT_PATH": checkpoint_path_for(cfg, args.fork_id, r["name"]),
+        "CHECKPOINT_PATH": checkpoint_path,
+        "RESUME_FROM": resume_from,
+        "IS_SELF_RESUME": "1" if own_bundle else "",
+        "ALREADY_FINAL": "1" if already_final else "",
+        "DIR_SAFE": "1" if dir_safe else "",
     }
     _print(fields, args.shell)
 
@@ -76,16 +112,16 @@ def _cmd_epochs_info(args):
 
 
 def _cmd_check_paths(args):
-    """Assert all 5 forks' checkpoint_path values are distinct and none
-    already exists as a non-empty directory. Exits non-zero on failure."""
+    """Assert all 5 forks' checkpoint_path values are distinct (a config
+    sanity check — catches duplicate regime ids/names). Per-fork directory
+    safety (empty / own prior progress / foreign content) is resolved by
+    `regime`'s DIR_SAFE field instead, since only that command knows which
+    fork a given directory belongs to."""
     cfg = load_fork_config(args.fork_config)
     paths = all_checkpoint_paths(cfg)
     if len(set(paths)) != len(paths):
         raise SystemExit(f"Fork checkpoint paths are not all distinct: {paths}")
-    for p in paths:
-        if os.path.isdir(p) and os.listdir(p):
-            raise SystemExit(f"Refusing to reuse non-empty checkpoint directory: {p}")
-    print(f"OK: {len(paths)} fork checkpoint paths are distinct and unused.")
+    print(f"OK: {len(paths)} fork checkpoint paths are distinct.")
 
 
 def main():

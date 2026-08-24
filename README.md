@@ -146,11 +146,20 @@ sbatch scripts/submit_fork_array.sh
 ```
 
 Each array task (`SLURM_ARRAY_TASK_ID` 0-4) resolves its regime from
-`config/fork_experiment.yaml`, resumes full training state from the shared
-base checkpoint via `--config-path <base_dir> --config-name all_config`,
-and trains under `arch.max_iter_dist=uniform` with that regime's
-`min_iter`/`max_iter`. `FORK_CONFIG=path sbatch --export=ALL,FORK_CONFIG=...
-scripts/submit_fork_array.sh` points at a different fork config.
+`config/fork_experiment.yaml`, resumes full training state via
+`--config-path <base_dir> --config-name all_config`, and trains under
+`arch.max_iter_dist=uniform` with that regime's `min_iter`/`max_iter`.
+`FORK_CONFIG=path sbatch --export=ALL,FORK_CONFIG=... scripts/submit_fork_array.sh`
+points at a different fork config.
+
+Requeue-safe: on a fork's first launch it resumes from the shared base
+checkpoint; if that array task is preempted and requeued (`REQUEUE` in the
+`#SBATCH --mail-type`), it detects its own previously-saved
+`step_<N>_train_state.pt` inside its own checkpoint dir and resumes from
+there instead — continuing training and the same W&B run rather than
+restarting from the base checkpoint and forking a duplicate W&B run each
+time. A fork that already has a `final` checkpoint exits immediately
+without relaunching.
 
 **What each fork writes**, under `<output_root>/fork<id>_<regime>/`:
 

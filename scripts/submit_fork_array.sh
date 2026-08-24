@@ -50,6 +50,10 @@ uv run python scripts/fork_common.py check-paths "$FORK_CONFIG"
 
 # Resolve this task's regime + the shared experiment settings from
 # FORK_CONFIG (single source of truth — do not duplicate these values here).
+# Includes RESUME_FROM: the shared base checkpoint on this fork's first
+# launch, or this fork's own latest bundle if it already made progress
+# (e.g. a SLURM requeue after preemption) — see fork_common.py's
+# own_resume_bundle().
 eval "$(uv run python scripts/fork_common.py regime "$FORK_CONFIG" "$FORK_ID" --shell)"
 
 BASE_DIR="$(dirname "$BASE_CHECKPOINT")"
@@ -66,6 +70,18 @@ if [[ ! -f "$BASE_ALL_CONFIG" ]]; then
   echo "mismatch across forks. See the script header for what's required." >&2
   exit 1
 fi
+if [[ -n "$ALREADY_FINAL" ]]; then
+  echo "${CHECKPOINT_PATH} already has a 'final' checkpoint — this fork" >&2
+  echo "already completed training. Nothing to do; exiting." >&2
+  exit 0
+fi
+if [[ -z "$DIR_SAFE" ]]; then
+  echo "Refusing to proceed: ${CHECKPOINT_PATH} is non-empty but contains no" >&2
+  echo "recognizable resume bundle of this fork's own — looks like foreign or" >&2
+  echo "stale content, not this fork's own in-progress checkpoints. Move it" >&2
+  echo "aside or point output_root somewhere clean." >&2
+  exit 1
+fi
 
 mkdir -p "$CHECKPOINT_PATH"
 
@@ -76,6 +92,7 @@ EPOCHS=$(( BASE_EPOCHS + ( (ADDITIONAL_EPOCHS_BUDGET + EVAL_INTERVAL - 1) / EVAL
 
 echo "FPRM fork experiment — array task ${FORK_ID} (${REGIME_NAME})"
 echo "  base checkpoint: ${BASE_CHECKPOINT}"
+echo "  resuming from:   ${RESUME_FROM} $( [[ -n "$IS_SELF_RESUME" ]] && echo '(own prior progress — requeue)' || echo '(shared base — first launch)' )"
 echo "  run name:        ${RUN_NAME}"
 echo "  checkpoint path: ${CHECKPOINT_PATH}"
 echo "  seed:            ${SEED}"
@@ -84,7 +101,7 @@ echo "  epochs:          ${BASE_EPOCHS} -> ${EPOCHS} (+${ADDITIONAL_EPOCHS_BUDGE
 echo "  wandb group:     ${WANDB_GROUP}"
 
 OVERRIDES=(
-  "resume_from=${BASE_BUNDLE}"
+  "resume_from=${RESUME_FROM}"
   "seed=${SEED}"
   "epochs=${EPOCHS}"
   "run_name=${RUN_NAME}"

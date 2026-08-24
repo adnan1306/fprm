@@ -594,6 +594,17 @@ def launch(hydra_config: DictConfig):
             ema_helper=ema_helper,
             dataset=train_loader.dataset,
         )
+        if config.fork_id is not None and prev_wandb_id is not None:
+            # A fork's first launch resumes from the shared base checkpoint,
+            # whose bundle carries the *base run's* wandb_id — reusing it
+            # would make all 5 forks fight over one W&B run. Only trust
+            # prev_wandb_id when the resumed bundle is this fork's own (a
+            # requeue after preemption continuing its own prior progress),
+            # i.e. it lives inside this fork's own checkpoint_path.
+            resume_dir = os.path.dirname(os.path.abspath(config.resume_from))
+            own_dir = os.path.abspath(config.checkpoint_path) if config.checkpoint_path else None
+            if own_dir is None or resume_dir != own_dir:
+                prev_wandb_id = None
 
     # Fork-experiment reproducibility snapshot: taken immediately after
     # loading the shared base checkpoint, before any further gradient step,
