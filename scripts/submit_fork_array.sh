@@ -46,7 +46,7 @@ export DISABLE_COMPILE="${DISABLE_COMPILE:-1}"
 # Preflight: all 5 forks' checkpoint dirs distinct and unused. Run by every
 # array task (cheap, idempotent) so a bad config fails fast on every task
 # rather than only on task 0.
-uv run python scripts/fork_common.py check-paths "$FORK_CONFIG"
+python scripts/fork_common.py check-paths "$FORK_CONFIG"
 
 # Resolve this task's regime + the shared experiment settings from
 # FORK_CONFIG (single source of truth — do not duplicate these values here).
@@ -54,7 +54,7 @@ uv run python scripts/fork_common.py check-paths "$FORK_CONFIG"
 # launch, or this fork's own latest bundle if it already made progress
 # (e.g. a SLURM requeue after preemption) — see fork_common.py's
 # own_resume_bundle().
-eval "$(uv run python scripts/fork_common.py regime "$FORK_CONFIG" "$FORK_ID" --shell)"
+eval "$(python scripts/fork_common.py regime "$FORK_CONFIG" "$FORK_ID" --shell)"
 
 BASE_DIR="$(dirname "$BASE_CHECKPOINT")"
 BASE_BUNDLE="${BASE_CHECKPOINT}_train_state.pt"
@@ -87,7 +87,7 @@ mkdir -p "$CHECKPOINT_PATH"
 
 # epochs override: base epochs + additional_epochs_budget, rounded up to a
 # multiple of eval_interval (pretrain.py asserts epochs % eval_interval == 0).
-eval "$(uv run python scripts/fork_common.py epochs-info "$BASE_ALL_CONFIG" --shell)"
+eval "$(python scripts/fork_common.py epochs-info "$BASE_ALL_CONFIG" --shell)"
 EPOCHS=$(( BASE_EPOCHS + ( (ADDITIONAL_EPOCHS_BUDGET + EVAL_INTERVAL - 1) / EVAL_INTERVAL ) * EVAL_INTERVAL ))
 
 echo "FPRM fork experiment — array task ${FORK_ID} (${REGIME_NAME})"

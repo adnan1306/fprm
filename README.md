@@ -175,7 +175,7 @@ without relaunching.
 diverged:
 
 ```bash
-uv run python scripts/verify_fork_checkpoints.py --fork-config config/fork_experiment.yaml
+python scripts/verify_fork_checkpoints.py --fork-config config/fork_experiment.yaml
 ```
 
 **Model soup, later.** `pretrain.mix_weights_direct` already implements
