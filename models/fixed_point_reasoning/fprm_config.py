@@ -16,6 +16,8 @@ class FPRMConfig(ReasoningModelConfig):
     max_iter: int
     # Eval-time max_iter cap. None = fall back to max_iter
     max_iter_eval: Optional[int] = None
+    # Lower bound for max_iter_dist == 'uniform'. Ignored by gamma/expon/det.
+    min_iter: int = 1
 
     # Variational dropout on the L_level output (multiplicative mask). Same
     # mask is reused for all FP iterations on a given sample (resampled when

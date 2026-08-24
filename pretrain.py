@@ -2,9 +2,11 @@ from typing import Optional, Any, Sequence, List
 from dataclasses import dataclass
 import os
 import math
+import json
 import yaml
 import shutil
 import copy
+from datetime import datetime, timezone
 
 import torch
 import torch._dynamo
@@ -29,6 +31,7 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import load_model_class, get_model_source_path
 from utils.flop_profiler import FlopProfiler
 from utils.resume import restore_train_state, save_resume_bundle
+from utils.checkpoint_diag import state_dict_checksum
 from models.ema import EMAHelper
 from plots.io import write_curves
 import length_gen_eval
@@ -115,13 +118,57 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
     )
 
 
-def save_train_state(config: PretrainConfig, train_state: TrainState):
+def save_train_state(config: PretrainConfig, train_state: TrainState, tag: Optional[str] = None):
     # FIXME: Only saved model.
     if config.checkpoint_path is None:
         return
 
     os.makedirs(config.checkpoint_path, exist_ok=True)
-    torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
+    fname = tag if tag else f"step_{train_state.step}"
+    torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, fname))
+
+
+def write_fork_metadata(config: PretrainConfig, *, start_step: int, final_step: int,
+                         best_eval_metric: Optional[float], best_eval_step: Optional[int],
+                         final_eval_metric: Optional[float], stopped_reason: str,
+                         post_load_checksum: str, final_checksum: str,
+                         timestamp_start_utc: str):
+    if config.checkpoint_path is None:
+        return
+    arch_extra = config.arch.__pydantic_extra__ or {}
+
+    def _py_float(x):
+        return None if x is None else float(x)
+
+    metadata = {
+        "fork_id": config.fork_id,
+        "fork_regime": config.fork_regime,
+        "base_checkpoint": config.resume_from,
+        "base_step": start_step,
+        "min_iter": arch_extra.get("min_iter"),
+        "max_iter": arch_extra.get("max_iter"),
+        "max_iter_dist": arch_extra.get("max_iter_dist"),
+        "seed": config.seed,
+        "wandb_group": config.wandb_group,
+        "wandb_project": config.project_name,
+        "wandb_run_id": wandb.run.id if wandb.run is not None else None,
+        "epochs_config": config.epochs,
+        "start_step": start_step,
+        "final_step": final_step,
+        "additional_steps_trained": final_step - start_step,
+        "stopped_reason": stopped_reason,
+        "best_eval_metric_key": config.early_stop_metric_key,
+        "best_eval_metric": _py_float(best_eval_metric),
+        "best_eval_step": best_eval_step,
+        "final_eval_metric": _py_float(final_eval_metric),
+        "post_load_checksum": post_load_checksum,
+        "final_checksum": final_checksum,
+        "timestamp_start_utc": timestamp_start_utc,
+        "timestamp_end_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    os.makedirs(config.checkpoint_path, exist_ok=True)
+    with open(os.path.join(config.checkpoint_path, "fork_metadata.json"), "wt") as f:
+        json.dump(metadata, f, indent=2)
 
 
 def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
@@ -548,6 +595,24 @@ def launch(hydra_config: DictConfig):
             dataset=train_loader.dataset,
         )
 
+    # Fork-experiment reproducibility snapshot: taken immediately after
+    # loading the shared base checkpoint, before any further gradient step,
+    # so verify_fork_checkpoints.py can confirm all forks started identical.
+    fork_start_step = train_state.step
+    fork_timestamp_start_utc = datetime.now(timezone.utc).isoformat()
+    post_load_checksum = None
+    if RANK == 0 and config.fork_id is not None:
+        save_train_state(config, train_state, tag="post_load")
+        post_load_checksum = state_dict_checksum(train_state.model.state_dict())
+
+    # Fork-experiment bookkeeping (no-ops when config.fork_id is None)
+    best_eval_metric: Optional[float] = None
+    best_eval_step: Optional[int] = None
+    evals_since_improve = 0
+    last_eval_metric: Optional[float] = None
+    should_stop = False
+    stopped_reason = "epoch_budget"
+
     # Progress bar and wandb
     progress_bar = None
     if RANK == 0:
@@ -556,6 +621,7 @@ def launch(hydra_config: DictConfig):
             project=config.project_name, name=config.run_name,
             id=prev_wandb_id, resume="allow" if prev_wandb_id else None,
             config=config.model_dump(),
+            group=config.wandb_group,
             settings=wandb.Settings(_disable_stats=True),
         )  # type: ignore
         if config.resume_from is None:
@@ -635,10 +701,26 @@ def launch(hydra_config: DictConfig):
                                  config.metrics_out)
                     print(f"Wrote per-k metrics to {config.metrics_out}")
 
+                if config.fork_id is not None:
+                    last_eval_metric = log.get(config.early_stop_metric_key)
+                    if last_eval_metric is not None:
+                        if best_eval_metric is None or last_eval_metric < best_eval_metric - config.early_stop_min_delta:
+                            best_eval_metric = last_eval_metric
+                            best_eval_step = train_state.step
+                            evals_since_improve = 0
+                        else:
+                            evals_since_improve += 1
+                        if (config.early_stop_patience_evals is not None
+                                and evals_since_improve >= config.early_stop_patience_evals):
+                            should_stop = True
+                            stopped_reason = "early_stop"
+
+            is_last_iter = (_iter_id == total_iters - 1) or should_stop
+
             ############ Checkpointing
             if RANK == 0:
                 print("SAVE CHECKPOINT")
-            if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
+            if RANK == 0 and (config.checkpoint_every_eval or is_last_iter):
                 save_train_state(config, train_state_eval)
                 save_resume_bundle(
                     checkpoint_path=config.checkpoint_path,
@@ -649,8 +731,41 @@ def launch(hydra_config: DictConfig):
                     wandb_run_id=wandb.run.id if wandb.run is not None else None,
                 )
 
+            if RANK == 0 and config.fork_id is not None and is_last_iter:
+                save_train_state(config, train_state_eval, tag="final")
+                final_checksum = state_dict_checksum(train_state_eval.model.state_dict())
+                save_resume_bundle(
+                    checkpoint_path=config.checkpoint_path,
+                    train_state=train_state,
+                    ema_helper=ema_helper,
+                    dataset_iters=(_iter_id + 1) * len(train_metadata.sets),
+                    iter_id=_iter_id,
+                    wandb_run_id=wandb.run.id if wandb.run is not None else None,
+                    tag="final",
+                )
+                write_fork_metadata(
+                    config,
+                    start_step=fork_start_step,
+                    final_step=train_state.step,
+                    best_eval_metric=best_eval_metric,
+                    best_eval_step=best_eval_step,
+                    final_eval_metric=last_eval_metric,
+                    stopped_reason=stopped_reason,
+                    post_load_checksum=post_load_checksum,
+                    final_checksum=final_checksum,
+                    timestamp_start_utc=fork_timestamp_start_utc,
+                )
+
             if config.ema:
                 del train_state_eval
+
+            if config.fork_id is not None:
+                if WORLD_SIZE > 1:
+                    flag = [should_stop]
+                    dist.broadcast_object_list(flag, src=0)
+                    should_stop = flag[0]
+                if should_stop:
+                    break
 
     # finalize
     if dist.is_initialized():

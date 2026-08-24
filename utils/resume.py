@@ -42,6 +42,7 @@ def save_resume_bundle(
     dataset_iters: int,
     iter_id: int,
     wandb_run_id: Optional[str],
+    tag: Optional[str] = None,
 ) -> None:
     """`dataset_iters` must be the value the worker's `PuzzleDataset._iters`
     has reached. The main-process dataset copy never observes the worker's
@@ -60,7 +61,8 @@ def save_resume_bundle(
         "wandb_id": wandb_run_id,
     }
     os.makedirs(checkpoint_path, exist_ok=True)
-    path = os.path.join(checkpoint_path, f"step_{train_state.step}{_BUNDLE_SUFFIX}")
+    fname = f"{tag}{_BUNDLE_SUFFIX}" if tag else f"step_{train_state.step}{_BUNDLE_SUFFIX}"
+    path = os.path.join(checkpoint_path, fname)
     torch.save(bundle, path)
 
 

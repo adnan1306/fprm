@@ -237,6 +237,8 @@ class FixedPointReasoningModel_ACTV1(nn.Module):
                 sampled_max_iter = gamma.rvs(a=self.config.gamma_alpha, scale=self.config.gamma_scale)
             elif self.config.max_iter_dist == 'expon':
                 sampled_max_iter = expon.rvs(scale=self.config.expon_scale)
+            elif self.config.max_iter_dist == 'uniform':
+                sampled_max_iter = random.uniform(self.config.min_iter, self.config.max_iter)
             elif self.config.max_iter_dist == 'det':
                 sampled_max_iter = self.config.max_iter
 

@@ -49,8 +49,20 @@ class PretrainConfig(pydantic.BaseModel):
     run_name: Optional[str] = None
     load_checkpoint: Optional[str] = None  # weights-only load (transfer / eval)
     resume_from: Optional[str] = None  # full resume: bundle path or its directory
-    checkpoint_path: Optional[str] = /home/m7adnan/fprm/checkpoints  # where to save checkpoints
+    checkpoint_path: Optional[str] = None  # where to save checkpoints
     metrics_out: Optional[str] = None  # eval-only: dump per-k metrics as plot JSON
+
+    # Fork-experiment metadata (purely descriptive; used for wandb naming and
+    # fork_metadata.json). None on ordinary (non-fork) runs.
+    fork_id: Optional[int] = None
+    fork_regime: Optional[str] = None
+    wandb_group: Optional[str] = None
+
+    # Optional early stopping on eval-metric plateau, as an alternative to a
+    # fixed additional-epochs budget. None disables (train to config.epochs).
+    early_stop_patience_evals: Optional[int] = None
+    early_stop_metric_key: str = "eval/lm_loss"  # matches losses.py's ACTLossHead metrics key
+    early_stop_min_delta: float = 0.0
 
     # Extrass
     seed: int = 0

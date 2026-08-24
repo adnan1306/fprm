@@ -108,6 +108,72 @@ uv run python pretrain.py --config-name cfg_pretrain_state_tracking_fprm_s5 \
     seed=1 +project_name=fprm-state-tracking +run_name=my-run +checkpoint_path=checkpoints/my-run
 ```
 
+## Forked Length-Specialization Experiment
+
+Forks one partially-trained checkpoint into 5 independent continued-training
+runs, each specializing in a different recurrent-computation-length regime
+(`T ~ Uniform(min_loops, max_loops)`, sampled fresh per training batch via
+`set_num_iters()`), while sharing the same architecture, optimizer state,
+and training step at the fork point. All other hyperparameters — data,
+`halting_mechanism`, loss weights — stay identical across forks, so
+computation length is isolated as the sole varying axis. Intended for
+later parameter-averaging ("model soup") across the 5 resulting checkpoints.
+
+**Prerequisites.** The base checkpoint directory must contain `step_<N>`
+(weights), `step_<N>_train_state.pt` (full resume bundle: optimizer, step,
+EMA, dataset shuffle counter), and `all_config.yaml` (the fully-resolved
+config from that run, written automatically by any normal training run
+once W&B has initialized). `all_config.yaml` is what guarantees all 5 forks
+share the source run's exact architecture — the launcher refuses to start
+without it rather than guessing a config from `config/`.
+
+**Configure.** Edit `config/fork_experiment.yaml`: `base_checkpoint`,
+`output_root`, per-fork `seed_base` offset, and the 5 `regimes`
+(`min_loops`/`max_loops`). The shipped values are tuned against the
+Maze-Hard base run's original `max_iter=24` — treat them as a starting
+point, not a validated default, for other datasets.
+`additional_epochs_budget` defaults to `0`, which leaves `epochs` exactly
+as the base run had it — correct whenever the base checkpoint isn't near
+the end of its original schedule, since there's already training budget
+left. Only raise it (it's rounded up to a multiple of `eval_interval`) if
+the checkpoint is close to/at its original `epochs` and the forks need
+more room to train past that point.
+
+**Launch** (SLURM job array, one task per fork):
+
+```bash
+sbatch scripts/submit_fork_array.sh
+```
+
+Each array task (`SLURM_ARRAY_TASK_ID` 0-4) resolves its regime from
+`config/fork_experiment.yaml`, resumes full training state from the shared
+base checkpoint via `--config-path <base_dir> --config-name all_config`,
+and trains under `arch.max_iter_dist=uniform` with that regime's
+`min_iter`/`max_iter`. `FORK_CONFIG=path sbatch --export=ALL,FORK_CONFIG=...
+scripts/submit_fork_array.sh` points at a different fork config.
+
+**What each fork writes**, under `<output_root>/fork<id>_<regime>/`:
+
+| File | When |
+|---|---|
+| `step_<N>`, `step_<N>_train_state.pt` | periodic, per `checkpoint_every_eval` |
+| `post_load`, `post_load_train_state.pt` | once, immediately after resuming — the reproducibility-check snapshot |
+| `final`, `final_train_state.pt` | once, at the end of training (epoch budget reached or early-stopped) |
+| `all_config.yaml` | once, at start — this fork's fully-resolved config |
+| `fork_metadata.json` | once, at end — base checkpoint, seed, regime, step range, best/final eval loss, mean loop count, checksums |
+
+**Verify.** Confirm all 5 forks started parameter-identical and later
+diverged:
+
+```bash
+uv run python scripts/verify_fork_checkpoints.py --fork-config config/fork_experiment.yaml
+```
+
+**Model soup, later.** `pretrain.mix_weights_direct` already implements
+linear weight averaging over a list of loaded models — load the 5
+`final` state_dicts and pass them there (not implemented as part of
+this experiment).
+
 ## Citation
 
 ```bibtex
