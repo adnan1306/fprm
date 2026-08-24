@@ -1,0 +1,37 @@
+# Five independent controls forked from the same base checkpoint. All use
+# the original FPRM training computation length: deterministic 24 iterations.
+# This file is consumed by scripts/submit_fixed_length_array.sh.
+
+base_checkpoint: /home/m7adnan/scratch/fprm/checkpoints/step_32550
+output_root: /home/m7adnan/scratch/fprm/fixed_length_experiment
+seed_base: 2000
+additional_epochs_budget: 0
+wandb_group: fprm-fixed-length-control-2026-08-24
+early_stop_patience_evals: null
+early_stop_metric_key: eval/lm_loss
+early_stop_min_delta: 0.0
+
+# Unique names keep all five checkpoint directories separate. min_loops and
+# max_loops are both 24 for compatibility with the shared fork config parser;
+# the launcher explicitly selects the deterministic distribution.
+regimes:
+  - id: 0
+    name: fixed24_replica0
+    min_loops: 24
+    max_loops: 24
+  - id: 1
+    name: fixed24_replica1
+    min_loops: 24
+    max_loops: 24
+  - id: 2
+    name: fixed24_replica2
+    min_loops: 24
+    max_loops: 24
+  - id: 3
+    name: fixed24_replica3
+    min_loops: 24
+    max_loops: 24
+  - id: 4
+    name: fixed24_replica4
+    min_loops: 24
+    max_loops: 24
